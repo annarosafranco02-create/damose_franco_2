@@ -1,0 +1,9 @@
+/target/
+/tiles/
+/.idea/
+*.iml
+/users.json
+/*_favorites.txt
+/favorites.txt
+*.log
+.DS_Store
