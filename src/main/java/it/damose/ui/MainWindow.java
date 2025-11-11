@@ -1,11 +1,13 @@
 package it.damose.ui;
 
 import it.damose.controller.*;
-import it.damose.map.Mappa;
+import it.damose.map.Mappa; // Importiamo il pannello Mappa
 import it.damose.model.*;
 import it.damose.realtime.RealtimeManager;
-import javax.swing.event.DocumentListener;
+
 import javax.swing.*;
+import javax.swing.event.DocumentEvent; // Per la ricerca live
+import javax.swing.event.DocumentListener; // Per la ricerca live
 import java.awt.*;
 import java.awt.event.*;
 import java.text.SimpleDateFormat;
@@ -45,18 +47,19 @@ public class MainWindow extends JFrame implements ConnectionListener {
     // --- Gestione Stato Interno ---
     private Object currentSelectedObject; // L'oggetto (Stop o Route) selezionato nella lista
     private Route currentlySelectedRoute = null; // La linea selezionata, per filtrare la mappa
+    private Timer searchDebounceTimer; // Timer per la ricerca live
 
     // --- Utilità ---
     private final SimpleDateFormat timeFormatter = new SimpleDateFormat("HH:mm");
-    private Timer searchDebounceTimer;
+
     /**
+     * Costruttore della finestra principale.
      * Gestisce il login, inizializza i controller e costruisce la UI.
      */
     public MainWindow() {
         super("Rome Transit Tracker - Damose");
 
         // --- 1. Finestra di Login ---
-        // L'app non si avvia finché il login non è completato.
         UserController userController = new UserController();
         LoginWindow loginDialog = new LoginWindow(this, userController);
         loginDialog.setVisible(true);
@@ -64,13 +67,12 @@ public class MainWindow extends JFrame implements ConnectionListener {
         String loggedInUsername = loginDialog.getLoggedInUsername();
         if (!loginDialog.didProceed()) {
             System.out.println("Accesso annullato. Chiusura applicazione.");
-            System.exit(0); // Chiude l'app se l'utente chiude il login
+            System.exit(0);
         }
 
         // --- 2. Inizializzazione dei Controller ---
-        // Creiamo i "cervelli" dell'applicazione
         controller = new StopController("src/main/resources/data/rome_static_gtfs");
-        favoritesManager = new FavoritesManager(loggedInUsername); // Manager preferiti sa chi sei
+        favoritesManager = new FavoritesManager(loggedInUsername);
         realtimeManager = new RealtimeManager();
 
         // Aggiorna il titolo della finestra in base all'utente
@@ -82,20 +84,24 @@ public class MainWindow extends JFrame implements ConnectionListener {
 
         // --- 3. Impostazioni Finestra ---
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setLocationRelativeTo(null); // Centra sullo schermo
+        setLocationRelativeTo(null);
+        // Apri l'app massimizzata (tutto schermo)
         setExtendedState(JFrame.MAXIMIZED_BOTH);
 
         // --- 4. Costruzione Layout ---
         initLayout();
-        loadAllData();// Carica i dati iniziali nella lista
+        loadAllData(); // Carica i dati iniziali nella lista
+
+        // --- 5. Attivazione Gestori ---
+        // Timer per la ricerca live "autocomplete"
         searchDebounceTimer = new Timer(300, e -> search());
         searchDebounceTimer.setRepeats(false);
-        // --- 5. Attivazione Gestori ---
+
         // Mettiamo in ascolto il ConnectionManager
         ConnectionManager.getInstance().addListener(this);
         ConnectionManager.getInstance().checkNow(); // Esegui il primo check (bloccante)
 
-        // Se il primo check ha dato esito positivo, avviamo subito i download
+        // Se siamo online, avviamo subito i download
         if (ConnectionManager.getInstance().isOnline()) {
             realtimeManager.start();
         }
@@ -117,19 +123,35 @@ public class MainWindow extends JFrame implements ConnectionListener {
 
     /**
      * Inizializza tutti i componenti UI e li assembla nel layout "Dashboard".
-     * Layout: [TOP: Ricerca] [SINISTRA: (Lista / Dettagli)] [DESTRA: Mappa] [BOTTOM: Stato]
      */
     private void initLayout() {
 
         // === PANNELLO SUPERIORE (Top) ===
         JPanel top = new JPanel(new BorderLayout(5, 5));
+
+        // --- 1. TASTO HOME (a sinistra) ---
+        JButton btnHome = new JButton("Home");
+        btnHome.setFont(new Font("Arial", Font.BOLD, 12));
+        btnHome.addActionListener(e -> {
+            searchField.setText(""); // Svuota la barra di ricerca
+            loadAllData(); // Ricarica la lista di tutte le fermate
+        });
+
+        JPanel homePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        homePanel.add(btnHome);
+        homePanel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 5)); // Margine a destra
+
+        top.add(homePanel, BorderLayout.WEST); // Aggiungi a sinistra
+
+        // --- 2. PANNELLO DI RICERCA (al centro) ---
+        // Definito UNA SOLA VOLTA
         JPanel searchPanel = new JPanel(new BorderLayout(5, 5));
         searchPanel.add(searchField, BorderLayout.CENTER);
         JButton searchBtn = new JButton("Cerca");
         searchPanel.add(searchBtn, BorderLayout.EAST);
         top.add(searchPanel, BorderLayout.CENTER);
 
-        // Pannello per i bottoni in alto a destra (solo "Preferiti")
+        // --- 3. PANNELLO PREFERITI (a destra) ---
         JPanel eastButtonsPanel = new JPanel(new GridLayout(1, 1, 5, 0));
         btnShowFavorites = new JButton("Preferiti");
         btnShowFavorites.setFont(new Font("Arial", Font.BOLD, 12));
@@ -141,7 +163,6 @@ public class MainWindow extends JFrame implements ConnectionListener {
         add(top, BorderLayout.NORTH); // Aggiungi il pannello superiore alla finestra
 
         // === PANNELLO SINISTRO (Left) ===
-        // Questo pannello conterrà due componenti, uno sopra l'altro
 
         // 1. Pannello Lista (in alto a sinistra)
         resultsList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
@@ -155,85 +176,77 @@ public class MainWindow extends JFrame implements ConnectionListener {
         detailArea.setBorder(BorderFactory.createTitledBorder("Dettaglio"));
         JScrollPane detailPane = new JScrollPane(detailArea);
 
-        // Creiamo un "wrapper" per i dettagli, per poter aggiungere
-        // il bottone "Aggiungi ai Preferiti" sopra l'area di testo.
+        // Wrapper per bottone preferiti + dettagli
         JPanel detailWrapperPanel = new JPanel(new BorderLayout(0, 5));
         JPanel detailControlsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 5, 0));
         btnToggleFavorite = new JButton("Aggiungi ai Preferiti");
         btnToggleFavorite.setFont(new Font("Arial", Font.BOLD, 12));
-        btnToggleFavorite.setVisible(false); // Nascosto finché non si seleziona nulla
+        btnToggleFavorite.setVisible(false);
         detailControlsPanel.add(btnToggleFavorite);
         detailWrapperPanel.add(detailControlsPanel, BorderLayout.NORTH);
         detailWrapperPanel.add(detailPane, BorderLayout.CENTER);
 
         // 3. Splitter Sinistro (Verticale)
-        // Unisce la Lista (sopra) e i Dettagli (sotto)
         JSplitPane leftSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, listPane, detailWrapperPanel);
-        leftSplit.setDividerLocation(300); // Spazio per la lista
-        leftSplit.setResizeWeight(0.4); // La lista occupa il 40% dello spazio verticale
+        leftSplit.setDividerLocation(300);
+        leftSplit.setResizeWeight(0.4);
 
         // === PANNELLO DESTRO (Right) ===
 
         // 4. Pannello Mappa
-        mappa = new Mappa(); // Creiamo il pannello mappa
-        // Passiamo i controller alla mappa
+        mappa = new Mappa();
         mappa.setRealtimeManager(realtimeManager);
         mappa.setStopController(controller);
 
         // === SPLITTER PRINCIPALE (Main) ===
 
         // 5. Splitter Orizzontale (Sinistra | Destra)
-        // Unisce il pannello sinistro (leftSplit) e la mappa (mappa)
         JSplitPane mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftSplit, mappa);
-        mainSplit.setDividerLocation(0.5); // Divisione iniziale al 50%
-        mainSplit.setResizeWeight(0.5);    // Mantiene la divisione al 50% quando si ridimensiona
-        add(mainSplit, BorderLayout.CENTER); // Aggiungi lo splitter principale alla finestra
+        mainSplit.setDividerLocation(0.5);
+        mainSplit.setResizeWeight(0.5);
+        add(mainSplit, BorderLayout.CENTER);
 
         // === PANNELLO INFERIORE (Bottom) ===
-        // Usato per mostrare lo stato della connessione
         JPanel statusPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         lblConnectionStatus = new JLabel("Controllo connessione...");
         lblConnectionStatus.setFont(new Font("Arial", Font.ITALIC, 12));
         lblConnectionStatus.setVisible(false);
         statusPanel.add(lblConnectionStatus);
         add(statusPanel, BorderLayout.SOUTH);
+
+        // Timer per nascondere il messaggio di stato
+        statusClearTimer = new Timer(5000, e -> lblConnectionStatus.setVisible(false));
+        statusClearTimer.setRepeats(false);
+
+        // --- LISTENER RICERCA LIVE (Autocomplete) ---
         searchField.getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(javax.swing.event.DocumentEvent e) {
-                // L'utente ha digitato qualcosa
                 triggerSearch();
             }
             @Override
             public void removeUpdate(javax.swing.event.DocumentEvent e) {
-                // L'utente ha cancellato qualcosa
                 triggerSearch();
             }
             @Override
             public void changedUpdate(javax.swing.event.DocumentEvent e) {
-                // Non usato per campi di testo semplici
+                // Non usato per campi di testo
             }
         });
 
-        // Timer per nascondere il messaggio di stato all'avvio
-        statusClearTimer = new Timer(5000, e -> lblConnectionStatus.setVisible(false));
-        statusClearTimer.setRepeats(false); // Esegui solo una volta
-
         // --- ACTION LISTENERS ---
-        // Collega i componenti UI alle loro funzioni logiche
-
-        // Listener per la ricerca (bottone e tasto Invio)
+        // Bottone "Cerca" e tasto Invio (per confermare)
         ActionListener doSearch = e -> search();
         searchBtn.addActionListener(doSearch);
         searchField.addActionListener(doSearch);
 
-        // Listener per il click sulla lista
+        // Click singolo sulla lista
         resultsList.addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) { // Esegui solo quando il click è terminato
+            if (!e.getValueIsAdjusting()) {
                 Object selected = resultsList.getSelectedValue();
                 if (selected != null) {
                     showDetails(selected);
                 } else {
-                    // Se non si seleziona nulla, pulisci i dettagli
                     btnToggleFavorite.setVisible(false);
                     currentSelectedObject = null;
                     detailArea.setText("");
@@ -241,32 +254,35 @@ public class MainWindow extends JFrame implements ConnectionListener {
             }
         });
 
-        // Listener per il doppio click sulla lista
+        // Doppio click sulla lista
         resultsList.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) { // Se è un doppio click
+                if (e.getClickCount() == 2) {
                     Object selected = resultsList.getSelectedValue();
                     if (selected != null) {
-                        showOnMap(selected); // Centra la mappa
+                        showOnMap(selected);
                     }
                 }
             }
         });
 
-        // Listener per il bottone "Aggiungi/Rimuovi Preferito"
+        // Click sul bottone preferiti
         btnToggleFavorite.addActionListener(e -> toggleFavorite());
     }
 
     /**
-     * Carica tutte le fermate nella lista (all'avvio).
+     * Carica tutte le fermate nella lista (stato "Home").
      */
     private void loadAllData() {
         btnToggleFavorite.setVisible(false);
         currentSelectedObject = null;
         this.currentlySelectedRoute = null;
-        if (mappa != null) mappa.setFilteredRoute(null); // Resetta filtro mappa
-        if (mappa != null) mappa.setSelectedStop(null);
+        if (mappa != null) {
+            mappa.setFilteredRoute(null);
+            mappa.setSelectedStop(null);
+        }
+
         listModel.clear();
         detailArea.setText("Caricamento di tutte le fermate...");
 
@@ -283,14 +299,27 @@ public class MainWindow extends JFrame implements ConnectionListener {
     }
 
     /**
+     * Chiamato ogni volta che il testo di ricerca cambia.
+     * Riavvia il timer di "debounce" per evitare ricerche ad ogni tasto.
+     */
+    private void triggerSearch() {
+        if (searchDebounceTimer != null) {
+            searchDebounceTimer.restart();
+        }
+    }
+
+    /**
      * Esegue la ricerca e aggiorna la lista con i risultati.
      */
     private void search() {
         btnToggleFavorite.setVisible(false);
         currentSelectedObject = null;
         this.currentlySelectedRoute = null;
-        if (mappa != null) mappa.setFilteredRoute(null); // Resetta filtro mappa
-        if (mappa != null) mappa.setSelectedStop(null);
+        if (mappa != null) {
+            mappa.setFilteredRoute(null);
+            mappa.setSelectedStop(null);
+        }
+
         String q = searchField.getText().trim();
         listModel.clear();
 
@@ -299,7 +328,9 @@ public class MainWindow extends JFrame implements ConnectionListener {
             return;
         }
 
-        //detailArea.setText("Ricerca in corso...");
+        // Non mostriamo "Ricerca in corso..." per la ricerca live
+        // detailArea.setText("Ricerca in corso...");
+
         SwingUtilities.invokeLater(() -> {
             List<Route> routeResults = controller.searchRoutes(q);
             for (Route r : routeResults) listModel.addElement(r);
@@ -318,27 +349,23 @@ public class MainWindow extends JFrame implements ConnectionListener {
 
     /**
      * Mostra i dettagli per l'oggetto selezionato (Fermata o Linea) nel pannello dei dettagli.
-     * Applica anche il filtro alla mappa.
+     * Applica anche il filtro e l'evidenziazione alla mappa.
      */
     private void showDetails(Object obj) {
         currentSelectedObject = obj;
         updateFavoriteButtonState();
         btnToggleFavorite.setVisible(true);
-        if (obj instanceof Stop s) {
-            if (mappa != null) mappa.setSelectedStop(s);
-        } else if (obj instanceof Route r) {
-            if (mappa != null) mappa.setSelectedStop(null); // Nascondi se si clicca una linea
-        }
-        // Aggiorna lo stato della rotta selezionata
-        if (obj instanceof Route r) {
-            this.currentlySelectedRoute = r;
-        } else if (obj instanceof Stop) {
-            this.currentlySelectedRoute = null; // Se seleziono una fermata, non filtro
-        }
 
-        // Applica il filtro alla mappa (la mappa lo ignorerà se è null)
         if (mappa != null) {
-            mappa.setFilteredRoute(currentlySelectedRoute);
+            if (obj instanceof Stop s) {
+                this.currentlySelectedRoute = null;
+                mappa.setSelectedStop(s); // Evidenzia fermata
+                mappa.setFilteredRoute(null); // Rimuovi filtro linea
+            } else if (obj instanceof Route r) {
+                this.currentlySelectedRoute = r;
+                mappa.setSelectedStop(null); // Rimuovi evidenziazione
+                mappa.setFilteredRoute(r); // Filtra per linea
+            }
         }
 
         // --- Costruzione del testo dei dettagli ---
@@ -434,11 +461,11 @@ public class MainWindow extends JFrame implements ConnectionListener {
         if (mappa == null) return; // Sicurezza
 
         if (obj instanceof Stop stop) {
-            mappa.setSelectedStop(stop);
+            mappa.setSelectedStop(stop); // Evidenzia la fermata
             mappa.centerOn(stop.getLat(), stop.getLon());
             mappa.setZoom(16); // Zoom alto
         } else if (obj instanceof Route route) {
-            mappa.setSelectedStop(null);
+            // (Il filtro è già stato impostato da showDetails)
             List<Stop> stops = controller.getStopsForRoute(route);
             if (stops != null && !stops.isEmpty()) {
                 // Centra sulla prima fermata della linea
@@ -458,32 +485,26 @@ public class MainWindow extends JFrame implements ConnectionListener {
         detailArea.setText("Caricamento preferiti...");
         btnToggleFavorite.setVisible(false);
         currentSelectedObject = null;
+        if (mappa != null) {
+            mappa.setFilteredRoute(null);
+            mappa.setSelectedStop(null);
+        }
 
         SwingUtilities.invokeLater(() -> {
-
-            // --- LOGICA CORRETTA PER LE FERMATE ---
+            // Usa la ricerca per ID Esatto
             Set<String> stopIds = favoritesManager.getFavoriteStopIds();
             for (String id : stopIds) {
-                // Usa il lookup ESATTO per ID
                 Stop result = controller.getStopById(id);
-                if (result != null) {
-                    listModel.addElement(result);
-                }
+                if (result != null) listModel.addElement(result);
             }
-
-            // --- LOGICA CORRETTA PER LE LINEE ---
             Set<String> routeIds = favoritesManager.getFavoriteRouteIds();
             for (String id : routeIds) {
-                // Usa il lookup ESATTO per ID
                 Route result = controller.getRouteById(id);
-                if (result != null) {
-                    listModel.addElement(result);
-                }
+                if (result != null) listModel.addElement(result);
             }
 
-            if (listModel.isEmpty()) {
-                detailArea.setText("Non hai ancora aggiunto preferiti.\n\nSeleziona una fermata o linea dalla ricerca e clicca 'Aggiungi ai Preferiti'.");
-            } else {
+            if (listModel.isEmpty()) detailArea.setText("Non hai ancora aggiunto preferiti.");
+            else {
                 detailArea.setText("Trovati " + listModel.getSize() + " preferiti.");
                 resultsList.setSelectedIndex(0);
             }
@@ -569,10 +590,5 @@ public class MainWindow extends JFrame implements ConnectionListener {
                 showDetails(currentSelectedObject);
             }
         });
-    }
-    private void triggerSearch() {
-        if (searchDebounceTimer != null) {
-            searchDebounceTimer.restart();
-        }
     }
 }

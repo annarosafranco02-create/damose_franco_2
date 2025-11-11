@@ -19,10 +19,10 @@ public class Main {
         Map<String, String> newDefaults = new HashMap<>();
 
         // 2. Colore d'accento
-        newDefaults.put( "@accentColor", "#D32F2F" );
+        newDefaults.put( "@accentColor", "#0D47A1" );
 
         // 3. COLORE DI SFONDO
-        newDefaults.put( "@background", "#FFEBEE" );
+        newDefaults.put( "@background", "#E3F2FD" );
 
         FlatLaf.setGlobalExtraDefaults( newDefaults ); // Ora il tipo corrisponde
 
