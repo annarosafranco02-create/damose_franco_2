@@ -1,10 +1,9 @@
 package it.damose.ui;
 
 import it.damose.controller.*;
-import it.damose.map.Mappa; // Importiamo il pannello Mappa
+import it.damose.map.Mappa;
 import it.damose.model.*;
 import it.damose.realtime.RealtimeManager;
-import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.*;
 import java.awt.*;
@@ -83,8 +82,8 @@ public class MainWindow extends JFrame implements ConnectionListener {
 
         // --- 3. Impostazioni Finestra ---
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setSize(1200, 800); // Dimensioni adatte al layout dashboard
         setLocationRelativeTo(null); // Centra sullo schermo
+        setExtendedState(JFrame.MAXIMIZED_BOTH);
 
         // --- 4. Costruzione Layout ---
         initLayout();
