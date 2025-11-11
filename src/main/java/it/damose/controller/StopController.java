@@ -299,4 +299,7 @@ public class StopController {
 
         return points;
     }
+    public Stop getStopById(String id) {
+        return stopMap.get(id); // stopMap usa già l'ID come chiave
+    }
 }

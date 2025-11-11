@@ -4,7 +4,8 @@ import it.damose.controller.*;
 import it.damose.map.Mappa; // Importiamo il pannello Mappa
 import it.damose.model.*;
 import it.damose.realtime.RealtimeManager;
-
+import javax.swing.event.DocumentEvent;
+import javax.swing.event.DocumentListener;
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -48,9 +49,8 @@ public class MainWindow extends JFrame implements ConnectionListener {
 
     // --- Utilità ---
     private final SimpleDateFormat timeFormatter = new SimpleDateFormat("HH:mm");
-
+    private Timer searchDebounceTimer;
     /**
-     * Costruttore della finestra principale.
      * Gestisce il login, inizializza i controller e costruisce la UI.
      */
     public MainWindow() {
@@ -88,8 +88,9 @@ public class MainWindow extends JFrame implements ConnectionListener {
 
         // --- 4. Costruzione Layout ---
         initLayout();
-        loadAllData(); // Carica i dati iniziali nella lista
-
+        loadAllData();// Carica i dati iniziali nella lista
+        searchDebounceTimer = new Timer(300, e -> search());
+        searchDebounceTimer.setRepeats(false);
         // --- 5. Attivazione Gestori ---
         // Mettiamo in ascolto il ConnectionManager
         ConnectionManager.getInstance().addListener(this);
@@ -197,6 +198,22 @@ public class MainWindow extends JFrame implements ConnectionListener {
         lblConnectionStatus.setVisible(false);
         statusPanel.add(lblConnectionStatus);
         add(statusPanel, BorderLayout.SOUTH);
+        searchField.getDocument().addDocumentListener(new DocumentListener() {
+            @Override
+            public void insertUpdate(javax.swing.event.DocumentEvent e) {
+                // L'utente ha digitato qualcosa
+                triggerSearch();
+            }
+            @Override
+            public void removeUpdate(javax.swing.event.DocumentEvent e) {
+                // L'utente ha cancellato qualcosa
+                triggerSearch();
+            }
+            @Override
+            public void changedUpdate(javax.swing.event.DocumentEvent e) {
+                // Non usato per campi di testo semplici
+            }
+        });
 
         // Timer per nascondere il messaggio di stato all'avvio
         statusClearTimer = new Timer(5000, e -> lblConnectionStatus.setVisible(false));
@@ -283,7 +300,7 @@ public class MainWindow extends JFrame implements ConnectionListener {
             return;
         }
 
-        detailArea.setText("Ricerca in corso...");
+        //detailArea.setText("Ricerca in corso...");
         SwingUtilities.invokeLater(() -> {
             List<Route> routeResults = controller.searchRoutes(q);
             for (Route r : routeResults) listModel.addElement(r);
@@ -442,20 +459,32 @@ public class MainWindow extends JFrame implements ConnectionListener {
         detailArea.setText("Caricamento preferiti...");
         btnToggleFavorite.setVisible(false);
         currentSelectedObject = null;
-        if (mappa != null) mappa.setSelectedStop(null);
+
         SwingUtilities.invokeLater(() -> {
+
+            // --- LOGICA CORRETTA PER LE FERMATE ---
             Set<String> stopIds = favoritesManager.getFavoriteStopIds();
             for (String id : stopIds) {
-                List<Stop> result = controller.searchStops(id);
-                if (!result.isEmpty()) listModel.addElement(result.get(0));
+                // Usa il lookup ESATTO per ID
+                Stop result = controller.getStopById(id);
+                if (result != null) {
+                    listModel.addElement(result);
+                }
             }
+
+            // --- LOGICA CORRETTA PER LE LINEE ---
             Set<String> routeIds = favoritesManager.getFavoriteRouteIds();
             for (String id : routeIds) {
-                List<Route> result = controller.searchRoutes(id);
-                if (!result.isEmpty()) listModel.addElement(result.get(0));
+                // Usa il lookup ESATTO per ID
+                Route result = controller.getRouteById(id);
+                if (result != null) {
+                    listModel.addElement(result);
+                }
             }
-            if (listModel.isEmpty()) detailArea.setText("Non hai ancora aggiunto preferiti.");
-            else {
+
+            if (listModel.isEmpty()) {
+                detailArea.setText("Non hai ancora aggiunto preferiti.\n\nSeleziona una fermata o linea dalla ricerca e clicca 'Aggiungi ai Preferiti'.");
+            } else {
                 detailArea.setText("Trovati " + listModel.getSize() + " preferiti.");
                 resultsList.setSelectedIndex(0);
             }
@@ -541,5 +570,10 @@ public class MainWindow extends JFrame implements ConnectionListener {
                 showDetails(currentSelectedObject);
             }
         });
+    }
+    private void triggerSearch() {
+        if (searchDebounceTimer != null) {
+            searchDebounceTimer.restart();
+        }
     }
 }
